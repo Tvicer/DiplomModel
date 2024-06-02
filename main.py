@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import http
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -925,6 +927,7 @@ def index():
     json = request.get_json()
     global df_master
     df_cor = df_master
+
     df1 = pd.DataFrame({"order1": json["order1"], "time1": json["time1"], "is_strong": ["0"], "tell1": json["tell1"]})
 
     df2 = pd.DataFrame({"order2": json["order2"], "time2": json["time2"], "is_strong": ["0"], "tell2": json["tell2"]})
@@ -963,7 +966,7 @@ def index():
     df_cor_scaled = scaler.transform(df_cor.fillna(0))
 
     kmeans = KMeans(n_clusters=2, random_state=0, n_init=10)
-    #clustering = kmeans.fit_predict(df_cor_scaled)
+    clustering = kmeans.fit_predict(df_cor_scaled)
 
     tr = kmeans.transform(df_cor_scaled)
 
@@ -972,6 +975,7 @@ def index():
     df_master = df_cor
 
     return str(df_cor["pr_is_strong"][df_cor["pr_is_strong"].size - 1])
+    #return http.HTTPStatus.OK
 
 if __name__ == "__main__":
     segmenter = Segmenter()
@@ -1030,9 +1034,9 @@ if __name__ == "__main__":
     #
     # df_cor = pd.concat([pd.DataFrame(), df_cor], axis=0, ignore_index=True)
 
-    engine = pg.connect("dbname='postgres' user='postgres' host='127.0.0.1' port='5432' password='123'")
+    engine = pg.connect("dbname='diplomDb' user='postgres' host='127.0.0.1' port='5432' password='123'")
 
-    df_cor = pd.read_sql('select * from processedDataSet', con=engine)
+    df_cor = pd.read_sql('select * from processeddataset', con=engine)
 
     scaler = preprocessing.StandardScaler().fit(df_cor.fillna(0))
     df_cor_scaled = scaler.transform(df_cor.fillna(0))
