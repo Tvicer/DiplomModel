@@ -16,7 +16,6 @@ from collections import Counter, namedtuple
 from itertools import product
 from typing import Dict, List
 from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering
-from sklearn import preprocessing
 
 from wiki_ru_wordnet import WikiWordnet
 from typing import Set
@@ -36,10 +35,17 @@ from natasha import (
 import natasha
 import ipymarkup
 from typing import Any, List, Dict, Tuple, Optional, Set
+
+from sklearn import preprocessing, metrics
+from xgboost import XGBClassifier
+
+import lime
+import lime.lime_tabular
+from sklearn.model_selection import train_test_split
 import os
 import json
 import re
-
+import joblib
 import time
 import Stemmer
 import pymorphy2
@@ -918,64 +924,97 @@ DEFAULT_PREFIXES = ('а','агит','ан','англо','анти','атто','�
 
 from flask import Flask, request
 
-df_master = pd.DataFrame()
+X_train = pd.DataFrame()
+feature_names = ''
+X_train_scaled = pd.DataFrame()
 
 app = Flask(__name__)
 
 @app.route('/api/nlp', methods=['POST'])
 def index():
+    global X_train
+    global feature_names
+    global X_train_scaled
+
     json = request.get_json()
-    global df_master
-    df_cor = df_master
 
-    df1 = pd.DataFrame({"order1": json["order1"], "time1": json["time1"], "is_strong": ["0"], "tell1": json["tell1"]})
+    df1 = pd.DataFrame({"time1": json["time1"], "is_strong": ["1"], "tell1": json["tell1"]})
 
-    df2 = pd.DataFrame({"order2": json["order2"], "time2": json["time2"], "is_strong": ["0"], "tell2": json["tell2"]})
+    df2 = pd.DataFrame({"time2": json["time2"], "is_strong": ["1"], "tell2": json["tell2"]})
 
-    df3 = pd.DataFrame({"time3": json["time3"], "is_strong": ["0"], "tell3": json["tell3"]})
+    df3 = pd.DataFrame({"time3": json["time3"], "is_strong": ["1"], "tell3": json["tell3"]})
 
-    Semantic_components = namedtuple('Semantic_components', ['full', 'entities', 'actions'])
+    Semantic_components = namedtuple('Semantic_components', ['full' , 'entities', 'actions'])
 
-    semantic_components_full = ['кошка', 'собака', 'навредить', 'сбросил/уронил цветок/горшок', 'упал грабли',
-                                ['грабли стукнули/кошке/дала', 'стукнули палка', 'кошке палка']]
-    semantic_components_entities = ['кошка', 'собака', 'цветок/горшок', 'грабли/палка/щетка']
-    semantic_components_actions = ['уронить/сбросить', 'упал', 'стукнуть/дала']
-    semantic_components2 = Semantic_components(semantic_components_full, semantic_components_entities,
-                                               semantic_components_actions)
-
-    semantic_components_full = ['ругает мама/тетя', 'поругать/ругает девочка/дочка', 'мальчик/сын/брат разбил']
-    semantic_components_entities = ['девочка/дочка', 'мама/тетя', 'мальчик/сын/брат', 'чашка']
-    semantic_components_actions = ['ругает', 'разбил']
-    semantic_components3 = Semantic_components(semantic_components_full, semantic_components_entities,
-                                               semantic_components_actions)
-
-    semantic_components_full = ['строил/делал мальчик/ребёнок', 'строил/делал башня/пирамидка',
-                                'разрушилась/сломалась/упала башня/пирамидка/она']
-    semantic_components_entities = ['мальчик/ребёнок', 'башня/пирамидка', 'ещё/другая/новая']
-    semantic_components_actions = ['строил/делал', 'разрушилась/сломалась/упала']
+    semantic_components_full = ['мама/мать спросила/сказала', 'дети/мальчик и девочка вернулись/пришли школы',
+                                'мальчик/мама/девочка хотел/знал/решил/заказал', 'оставила/забыла сумку/кошелек/деньги']
+    semantic_components_entities = ['мама/мать', 'дети' 'девочка', 'мальчик', 'еда', 'чизбургер', 'сумка/кошелек',
+                                    'Макдональдс/ресторан', 'дома', 'чизбургер/сэндвич', 'коктейль', 'мороженое/рожок',
+                                    'салат', 'кола', 'хэппи мил', 'школа', 'продавец/кассир']
+    semantic_components_actions = ['вернулись', 'спросила/сказала', 'кричали' 'сели', 'поехали/пошли',
+                                   'не знала/решила', 'заказать', 'хотел/знали', 'забыла/оставила']
     semantic_components1 = Semantic_components(semantic_components_full, semantic_components_entities,
                                                semantic_components_actions)
 
-    for df, postfix, semantic_components in zip([df1, df2, df3], list(range(1, 4)),
-                                                [semantic_components1, semantic_components2, semantic_components3]):
-        df_cor_new = get_df(df, str(postfix), semantic_components)
+    semantic_components_full = ['мальчик проснулся/встал', 'посмотрел время/часы', 'разлил молоко',
+                                'опоздал школу/автобус', 'порвались/сломались шнурки/веревки', 'автобус ушел/уехал']
+    semantic_components_entities = ['мальчик', 'хлопья', 'молоко', 'шнурки/веревки', 'ботинки', 'автобус', 'школа',
+                                    'учитель', 'время/часы']
+    semantic_components_actions = ['проснулся', 'посмотрел', 'разлил', 'порвал/сломал', 'опоздал', 'побежал/пошел']
+    semantic_components2 = Semantic_components(semantic_components_full, semantic_components_entities,
+                                               semantic_components_actions)
 
-    df_cor = pd.concat([df_cor, df_cor_new], axis=0, ignore_index=True)
+    semantic_components_full = ['мальчик/брат напугал/испугался', 'девочка/сестра посмотреть/подружиться/увидеть',
+                                'нло/инопланеняне/пришельцы упала/приземлилась/прилетела']
+    semantic_components_entities = ['мальчик/брат', 'девочка/сестра', 'нло/инопланеняне/пришельцы',
+                                    'космический корабль', 'мама', 'папа', 'собака', 'люди', 'дети/ребенок', 'родители']
+    semantic_components_actions = ['гуляли', 'увидели', 'упала/приземлилась/прилетела', 'посмотреть/подружиться',
+                                   'испугался/боялся', 'спрятался', 'вернулись', 'не поверили']
+    semantic_components3 = Semantic_components(semantic_components_full, semantic_components_entities,
+                                               semantic_components_actions)
 
-    scaler = preprocessing.StandardScaler().fit(df_cor.fillna(0))
-    df_cor_scaled = scaler.transform(df_cor.fillna(0))
 
-    kmeans = KMeans(n_clusters=2, random_state=0, n_init=10)
-    clustering = kmeans.fit_predict(df_cor_scaled)
+    df_new = pd.concat([get_df(df1, "1", semantic_components1),
+                        get_df(df2, "2", semantic_components2),
+                        get_df(df3, "3", semantic_components3)], axis=1)
 
-    tr = kmeans.transform(df_cor_scaled)
+    new_columns = ['Кол-во слов', 'Кол-во предл', 'Кол-во уник. слов', 'Кол-во слож предл',
+                   'Средняя длина предл', 'TTR', 'Проц прил', 'Проц наречий', 'Проц мест',
+                   'Проц сущ', 'Проц глаг', 'Семант полнота', 'Сущ сем комп',
+                   'Действия сем комп', 'time', 'is_strong', 'Кол-во слов.1',
+                   'Кол-во предл.1', 'Кол-во уник. слов.1', 'Кол-во слож предл.1',
+                   'Средняя длина предл.1', 'TTR.1', 'Проц прил.1', 'Проц наречий.1',
+                   'Проц мест.1', 'Проц сущ.1', 'Проц глаг.1', 'Семант полнота.1',
+                   'Сущ сем комп.1', 'Действия сем комп.1', 'time.1', 'is_strong.1',
+                   'Кол-во слов.2', 'Кол-во предл.2', 'Кол-во уник. слов.2',
+                   'Кол-во слож предл.2', 'Средняя длина предл.2', 'TTR.2', 'Проц прил.2',
+                   'Проц наречий.2', 'Проц мест.2', 'Проц сущ.2', 'Проц глаг.2',
+                   'Семант полнота.2', 'Сущ сем комп.2', 'Действия сем комп.2', 'time.2',
+                   'is_strong.2']
 
-    df_cor["pr_is_strong"] = list(map(lambda x: x[0] / (x[0] + x[1]), tr))
+    df_new.columns = new_columns
 
-    df_master = df_cor
+    df_new = df_new.drop(['is_strong', 'is_strong.1', 'is_strong.2'], axis=1, errors='ignore')
 
-    return str(df_cor["pr_is_strong"][df_cor["pr_is_strong"].size - 1])
-    #return http.HTTPStatus.OK
+    explainer = lime.lime_tabular.LimeTabularExplainer(
+        training_data=X_train_scaled,
+        feature_names=feature_names,
+        class_names=['0', '1'],
+        mode='classification'
+    )
+
+    all_features = X_train.columns.tolist()
+
+    for feature in df_new.columns:
+        if feature in df.columns:
+            df_new[feature] = df[feature].values[0]
+
+    new_scaler = scaler.transform(df_new)
+
+    instance = new_scaler[0].reshape(1, -1)
+    prediction = model.predict_proba(instance)
+
+    return str(prediction[0][1])
 
 if __name__ == "__main__":
     segmenter = Segmenter()
@@ -989,67 +1028,22 @@ if __name__ == "__main__":
     preprocess = SentencesPreprocessor().normalize_sentence
 
     nltk.download("stopwords")
-    #
-    # path_data_speech = 'Тексты детей по РФ и эмоциям_parsed.csv'
-    # df_new = pd.read_csv(path_data_speech)
-    # df_new.fillna('', inplace=True)
-    #
-    # df1 = df_new[['order1', 'time1', 'is_strong']]
-    # df1['tell1'] = df_new['tell1'].map(lambda s: re.sub('\.{2,} ?', ' ', s.replace('\t', ' ')))
-    # df1 = df1[df1['tell1'] != '']
-    #
-    # df2 = df_new[['order2', 'time2', 'is_strong']]
-    # df2['tell2'] = df_new['tell2_prep'].map(lambda s: re.sub('\.{2,} ?', ' ', s.replace('\t', ' ')))
-    # df2 = df2[df2['tell2'] != '']
-    #
-    # df3 = df_new[['time3', 'is_strong']]
-    # df3['tell3'] = df_new['tell3_prep'].map(lambda s: re.sub('\.{2,} ?', ' ', s.replace('\t', ' ')))
-    # df3 = df3[df3['tell3'] != '']
-    #
-    # Semantic_components = namedtuple('Semantic_components', ['full', 'entities', 'actions'])
-    #
-    # semantic_components_full = ['кошка', 'собака', 'навредить', 'сбросил/уронил цветок/горшок', 'упал грабли',
-    #                             ['грабли стукнули/кошке/дала', 'стукнули палка', 'кошке палка']]
-    # semantic_components_entities = ['кошка', 'собака', 'цветок/горшок', 'грабли/палка/щетка']
-    # semantic_components_actions = ['уронить/сбросить', 'упал', 'стукнуть/дала']
-    # semantic_components2 = Semantic_components(semantic_components_full, semantic_components_entities,
-    #                                            semantic_components_actions)
-    #
-    # semantic_components_full = ['ругает мама/тетя', 'поругать/ругает девочка/дочка', 'мальчик/сын/брат разбил']
-    # semantic_components_entities = ['девочка/дочка', 'мама/тетя', 'мальчик/сын/брат', 'чашка']
-    # semantic_components_actions = ['ругает', 'разбил']
-    # semantic_components3 = Semantic_components(semantic_components_full, semantic_components_entities,
-    #                                            semantic_components_actions)
-    #
-    # semantic_components_full = ['строил/делал мальчик/ребёнок', 'строил/делал башня/пирамидка',
-    #                             'разрушилась/сломалась/упала башня/пирамидка/она']
-    # semantic_components_entities = ['мальчик/ребёнок', 'башня/пирамидка', 'ещё/другая/новая']
-    # semantic_components_actions = ['строил/делал', 'разрушилась/сломалась/упала']
-    # semantic_components1 = Semantic_components(semantic_components_full, semantic_components_entities,
-    #                                            semantic_components_actions)
-    #
-    # for df, postfix, semantic_components in zip([df1, df2, df3], list(range(1, 4)),
-    #                                             [semantic_components1, semantic_components2, semantic_components3]):
-    #     df_cor = get_df(df, str(postfix), semantic_components)
-    #
-    # df_cor = pd.concat([pd.DataFrame(), df_cor], axis=0, ignore_index=True)
 
-    engine = pg.connect("dbname='diplomDb' user='postgres' host='127.0.0.1' port='5432' password='123'")
+    data = pd.read_csv(
+        'data_ch_new.csv',
+        header=1)
+    data = data.drop(['is_strong.1', 'is_strong.2'], axis=1, errors='ignore')
+    df = pd.DataFrame(data)
+    X_train = df.drop('is_strong', axis=1)  # Признаки (DataFrame)
 
-    df_cor = pd.read_sql('select * from processeddataset', con=engine)
+    feature_names = X_train.columns.tolist()
+    X_train_df = pd.DataFrame(X_train, columns=feature_names)
 
-    scaler = preprocessing.StandardScaler().fit(df_cor.fillna(0))
-    df_cor_scaled = scaler.transform(df_cor.fillna(0))
+    scaler = preprocessing.StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train_df)
 
-    kmeans = KMeans(n_clusters=2, random_state=0, n_init=10)
-    clustering = kmeans.fit_predict(df_cor_scaled)
+    model = joblib.load('xgb_clf2.joblib')
 
-    tr = kmeans.transform(df_cor_scaled)
-
-    df_cor["pr_is_strong"] = list(map(lambda x: x[0] / (x[0] + x[1]), tr))
-
-    df_master = df_cor
-
-    app.run(debug=False)
+    app.run(debug=False, port=5000)
 
 
