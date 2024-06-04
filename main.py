@@ -1034,7 +1034,7 @@ if __name__ == "__main__":
         header=1)
     data = data.drop(['is_strong.1', 'is_strong.2'], axis=1, errors='ignore')
     df = pd.DataFrame(data)
-    X_train = df.drop('is_strong', axis=1)  # Признаки (DataFrame)
+    X_train = df.drop('is_strong', axis=1)
 
     feature_names = X_train.columns.tolist()
     X_train_df = pd.DataFrame(X_train, columns=feature_names)
